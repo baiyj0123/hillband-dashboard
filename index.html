@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HillBand</title>
+<style>
+  :root { color-scheme: dark; --bg:#08090c; --card:#12141a; --line:#232733; --text:#eef1f7; --muted:#8b93a7; --accent:#ff7a3d; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"SF Pro SC","PingFang SC",sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; padding:18px 22px; border-bottom:1px solid var(--line); position:sticky; top:0; background:rgba(8,9,12,.92); backdrop-filter:blur(8px); z-index:5; }
+  .brand { font-weight:700; font-size:20px; }
+  .brand span { color:var(--muted); font-weight:400; font-size:13px; margin-left:8px; }
+  .actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  input { background:#0d0f14; border:1px solid var(--line); color:var(--text); border-radius:9px; padding:8px 10px; font-size:13px; width:300px; }
+  button { background:var(--card); border:1px solid var(--line); color:var(--text); border-radius:9px; padding:8px 13px; font-size:13px; cursor:pointer; }
+  button:hover { border-color:#3a4152; }
+  button.primary { background:var(--accent); color:#111; border-color:var(--accent); font-weight:600; }
+  main { padding:22px; max-width:1080px; margin:0 auto; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:20px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px 16px; }
+  .stat .k { color:var(--muted); font-size:12px; }
+  .stat .v { font-size:24px; font-weight:650; margin-top:4px; font-variant-numeric:tabular-nums; }
+  .stat .v small { font-size:12px; color:var(--muted); font-weight:400; margin-left:3px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  thead th { text-align:left; color:var(--muted); font-weight:500; font-size:12px; padding:10px; border-bottom:1px solid var(--line); }
+  tbody td { padding:12px 10px; border-bottom:1px solid #171a22; font-variant-numeric:tabular-nums; }
+  tbody tr { cursor:pointer; }
+  tbody tr:hover { background:#101319; }
+  .right { text-align:right; }
+  .accent { color:var(--accent); }
+  .muted { color:var(--muted); }
+  .panel { margin-top:18px; background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; }
+  .panel h2 { margin:0 0 4px; font-size:19px; }
+  .panel .sub { color:var(--muted); font-size:13px; margin-bottom:14px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; margin:12px 0 4px; }
+  .cell { background:#0d0f14; border:1px solid var(--line); border-radius:11px; padding:10px 12px; }
+  .cell .k { color:var(--muted); font-size:11px; }
+  .cell .v { font-size:18px; font-weight:600; margin-top:2px; font-variant-numeric:tabular-nums; }
+  .chart-card { margin-top:16px; }
+  .chart-card .title { font-size:13px; color:var(--muted); margin-bottom:6px; }
+  svg.chart { width:100%; height:auto; display:block; }
+  .zones { display:flex; gap:2px; height:10px; margin-top:10px; border-radius:4px; overflow:hidden; }
+  .zone-legend { display:flex; justify-content:space-between; font-size:11px; color:var(--muted); margin-top:6px; }
+  .empty, .error { padding:26px; text-align:center; color:var(--muted); }
+  .hidden { display:none; }
+  footer { color:#5c6373; font-size:12px; text-align:center; padding:28px 0 40px; }
+  a { color:var(--accent); }
+  .more { margin-top:14px; width:100%; }
+  @media (max-width:640px) { main { padding:14px; } input { width:100%; } .actions { width:100%; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">HillBand <span>爬坡记录 · GitHub 备份</span></div>
+  <div class="actions">
+    <input id="tokenInput" type="password" placeholder="GitHub Token（Contents: Read）" autocomplete="off" />
+    <button id="saveBtn" class="primary">保存</button>
+    <button id="refreshBtn">刷新</button>
+  </div>
+</header>
+<main>
+  <section class="stats" id="stats"></section>
+  <section id="list"></section>
+  <section id="detail" class="panel hidden"></section>
+  <footer>
+    数据来自 <a href="https://github.com/baiyj0123/hillband-data" target="_blank" rel="noreferrer">私有仓库 hillband-data</a> ·
+    token 只存在本机浏览器
+  </footer>
+</main>
+<script>
+(function () {
+  var OWNER = 'baiyj0123';
+  var REPO = 'hillband-data';
+  var PAGE = 20;
+
+  var state = { token: '', files: [], loaded: {}, detail: null };
+
+  var tokenInput = document.getElementById('tokenInput');
+  var statsEl = document.getElementById('stats');
+  var listEl = document.getElementById('list');
+  var detailEl = document.getElementById('detail');
+
+  var zoneColors = ['#5c9ef2','#4dccb8','#75d166','#fab243','#f25c5c'];
+  var zoneNames = ['Z1','Z2','Z3','Z4','Z5'];
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+    });
+  }
+
+  function fmtDate(iso) {
+    var d = new Date(iso);
+    return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function fmtDuration(seconds) {
+    seconds = Math.round(seconds);
+    var h = Math.floor(seconds / 3600);
+    var m = Math.floor((seconds % 3600) / 60);
+    var s = seconds % 60;
+    if (h > 0) return h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+    return m + ':' + String(s).padStart(2, '0');
+  }
+
+  function initToken() {
+    var fromUrl = new URLSearchParams(location.search).get('token');
+    var stored = localStorage.getItem('hb_gh_token') || '';
+    state.token = fromUrl || stored;
+    if (state.token) {
+      localStorage.setItem('hb_gh_token', state.token);
+      tokenInput.value = state.token;
+      if (fromUrl) history.replaceState(null, '', location.pathname);
+    }
+  }
+
+  function api(path) {
+    return fetch('https://api.github.com' + path, {
+      headers: {
+        'Authorization': 'Bearer ' + state.token,
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28'
+      }
+    }).then(function (response) {
+      if (response.status === 401) throw new Error('Token 无效或已过期');
+      if (response.status === 404) return null;
+      if (response.status === 403) throw new Error('GitHub 限流，请稍后再试');
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return response.json();
+    });
+  }
+
+  function decodeContent(base64) {
+    var binary = atob((base64 || '').replace(/\n/g, ''));
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return JSON.parse(new TextDecoder().decode(bytes));
+  }
+
+  function load() {
+    if (!state.token) {
+      statsEl.innerHTML = '';
+      listEl.innerHTML = '<div class="empty">填入一个对 <b>hillband-data</b> 有 Contents: Read 权限的 GitHub Token，点保存。<br/>' +
+        '<span class="muted">Settings → Developer settings → Personal access tokens → Fine-grained token</span></div>';
+      return;
+    }
+    listEl.innerHTML = '<div class="empty">加载中…</div>';
+    api('/repos/' + OWNER + '/' + REPO + '/contents/sessions').then(function (files) {
+      state.files = (files || []).filter(function (f) { return f.name.endsWith('.json'); }).sort(function (a, b) {
+        return b.name < a.name ? -1 : 1;
+      });
+      state.loaded = {};
+      return loadBatch(0, PAGE);
+    }).then(function () {
+      renderStats();
+      renderList();
+    }).catch(function (error) {
+      listEl.innerHTML = '<div class="error">' + escapeHtml(error.message) + '</div>';
+    });
+  }
+
+  function loadBatch(offset, count) {
+    var slice = state.files.slice(offset, offset + count);
+    return Promise.all(slice.map(function (file) {
+      if (state.loaded[file.name]) return Promise.resolve();
+      return api('/repos/' + OWNER + '/' + REPO + '/contents/sessions/' + encodeURIComponent(file.name)).then(function (data) {
+        if (data && data.content) state.loaded[file.name] = decodeContent(data.content);
+      }).catch(function () {});
+    }));
+  }
+
+  function loadedSessions() {
+    return state.files.filter(function (f) { return state.loaded[f.name]; }).map(function (f) { return state.loaded[f.name]; });
+  }
+
+  function renderStats() {
+    var sessions = loadedSessions();
+    var ascent = 0, distance = 0, duration = 0;
+    sessions.forEach(function (s) {
+      ascent += Number(s.ascentM) || 0;
+      distance += Number(s.distanceM) || 0;
+      duration += Number(s.durationSeconds) || 0;
+    });
+    var items = [
+      ['训练次数', sessions.length, '次'],
+      ['累计爬升', Math.round(ascent), 'm'],
+      ['累计距离', (distance / 1000).toFixed(2), 'km'],
+      ['累计时长', fmtDuration(duration), '']
+    ];
+    statsEl.innerHTML = items.map(function (item) {
+      return '<div class="stat"><div class="k">' + item[0] + '</div><div class="v">' + item[1] +
+        (item[2] ? '<small>' + item[2] + '</small>' : '') + '</div></div>';
+    }).join('');
+  }
+
+  function renderList() {
+    var sessions = loadedSessions();
+    if (!sessions.length) {
+      listEl.innerHTML = '<div class="empty">还没有记录。在 App 里完成一次训练，或到「设置 → 云端同步」点立即同步。</div>';
+      return;
+    }
+    var rows = sessions.map(function (s) {
+      return '<tr data-name="' + escapeHtml(s.startedAt) + '">' +
+        '<td>' + fmtDate(s.startedAt) + '</td>' +
+        '<td class="right">' + fmtDuration(s.durationSeconds) + '</td>' +
+        '<td class="right">' + (Number(s.distanceM) / 1000).toFixed(2) + ' km</td>' +
+        '<td class="right accent">+' + Math.round(s.ascentM) + ' m</td>' +
+        '<td class="right">' + Math.round(s.avgGradePercent) + '%</td>' +
+        '<td class="right">' + Math.round(s.avgHeartRate) + ' bpm</td>' +
+        '<td class="right">' + Math.round(s.caloriesACSM) + ' kcal</td>' +
+        '</tr>';
+    }).join('');
+
+    var more = '';
+    if (state.files.length > Object.keys(state.loaded).length) {
+      more = '<button class="more" id="moreBtn">加载更多（已显示 ' + Object.keys(state.loaded).length + ' / ' + state.files.length + '）</button>';
+    }
+
+    listEl.innerHTML = '<table><thead><tr>' +
+      '<th>时间</th><th class="right">时长</th><th class="right">距离</th><th class="right">爬升</th>' +
+      '<th class="right">均坡</th><th class="right">心率</th><th class="right">热量</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>' + more;
+
+    var moreBtn = document.getElementById('moreBtn');
+    if (moreBtn) {
+      moreBtn.addEventListener('click', function () {
+        moreBtn.disabled = true;
+        moreBtn.textContent = '加载中…';
+        loadBatch(Object.keys(state.loaded).length, PAGE).then(function () {
+          renderStats();
+          renderList();
+        });
+      });
+    }
+  }
+
+  function chart(points, options) {
+    options = options || {};
+    var height = options.height || 170;
+    var width = 680;
+    var padL = 36, padR = 12, padT = 12, padB = 22;
+    if (!points.length) return '<div class="empty">无数据</div>';
+
+    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    points.forEach(function (p) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    });
+    if (maxY - minY < 1) maxY = minY + 1;
+    if (maxX - minX <= 0) maxX = minX + 1;
+
+    function sx(x) { return padL + (x - minX) / (maxX - minX) * (width - padL - padR); }
+    function sy(y) { return height - padB - (y - minY) / (maxY - minY) * (height - padT - padB); }
+
+    var path = '';
+    for (var i = 0; i < points.length; i++) {
+      var x = sx(points[i].x).toFixed(1);
+      var y = sy(points[i].y).toFixed(1);
+      if (i === 0) path = 'M' + x + ' ' + y;
+      else if (options.step) path += ' H' + x + ' V' + y;
+      else path += ' L' + x + ' ' + y;
+    }
+
+    var area = options.area
+      ? '<path d="' + path + ' L' + sx(maxX).toFixed(1) + ' ' + (height - padB) + ' L' + sx(minX).toFixed(1) + ' ' + (height - padB) + ' Z" fill="' + options.color + '" opacity="0.12" />'
+      : '';
+
+    var grid = '';
+    for (var g = 0; g <= 3; g++) {
+      var gy = padT + (height - padT - padB) * g / 3;
+      var label = maxY - (maxY - minY) * g / 3;
+      grid += '<line x1="' + padL + '" y1="' + gy.toFixed(1) + '" x2="' + (width - padR) + '" y2="' + gy.toFixed(1) + '" stroke="#232733" />';
+      grid += '<text x="' + (padL - 6) + '" y="' + (gy + 3).toFixed(1) + '" fill="#6b7280" font-size="10" text-anchor="end">' + Math.round(label) + '</text>';
+    }
+
+    return '<svg class="chart" viewBox="0 0 ' + width + ' ' + height + '">' + grid + area +
+      '<path d="' + path + '" fill="none" stroke="' + (options.color || '#ff7a3d') + '" stroke-width="2" stroke-linecap="round" />' +
+      '<text x="' + padL + '" y="' + (height - 6) + '" fill="#6b7280" font-size="10">0′</text>' +
+      '<text x="' + (width - padR) + '" y="' + (height - 6) + '" fill="#6b7280" font-size="10" text-anchor="end">' + Math.round(maxX / 60) + '′</text>' +
+      '</svg>';
+  }
+
+  function renderDetail(session) {
+    var zoneSeconds = session.zoneSeconds || [0,0,0,0,0];
+    var zoneTotal = zoneSeconds.reduce(function (a, b) { return a + b; }, 0) || 1;
+
+    var zones = zoneSeconds.map(function (value, index) {
+      return '<div style="width:' + (value / zoneTotal * 100) + '%;background:' + zoneColors[index] + '"></div>';
+    }).join('');
+    var zoneLegend = zoneSeconds.map(function (value, index) {
+      return '<span>' + zoneNames[index] + ' ' + Math.round(value / 60) + 'm</span>';
+    }).join('');
+
+    var hrPoints = (session.heartRateSamples || []).map(function (s) { return { x: s.t, y: s.bpm }; });
+    var gradePoints = (session.segments || []).map(function (s) { return { x: s.start, y: s.gradePercent }; });
+    var speedPoints = (session.segments || []).map(function (s) { return { x: s.start, y: s.speedKmh }; });
+    if (session.segments && session.segments.length) {
+      var last = session.segments[session.segments.length - 1];
+      gradePoints.push({ x: last.end, y: last.gradePercent });
+      speedPoints.push({ x: last.end, y: last.speedKmh });
+    }
+
+    var cells = [
+      ['距离', (session.distanceM / 1000).toFixed(2) + ' km'],
+      ['爬升', Math.round(session.ascentM) + ' m'],
+      ['平均坡度', session.avgGradePercent.toFixed(1) + '%'],
+      ['平均速度', session.avgSpeedKmh.toFixed(1) + ' km/h'],
+      ['热量', Math.round(session.caloriesACSM) + ' kcal'],
+      ['心率法参考', Math.round(session.caloriesHR) + ' kcal'],
+      ['平均心率', session.avgHeartRate + ' bpm'],
+      ['最高心率', session.maxHeartRate + ' bpm'],
+      ['有氧解耦', session.decouplingPercent == null ? '—' : session.decouplingPercent.toFixed(1) + '%']
+    ].map(function (cell) {
+      return '<div class="cell"><div class="k">' + cell[0] + '</div><div class="v">' + cell[1] + '</div></div>';
+    }).join('');
+
+    var segmentRows = (session.segments || []).map(function (s, index) {
+      return '<tr><td class="muted">#' + (index + 1) + '</td>' +
+        '<td class="right">' + fmtDuration(s.start) + '</td>' +
+        '<td class="right">' + fmtDuration(s.end) + '</td>' +
+        '<td class="right">' + s.speedKmh.toFixed(1) + ' km/h</td>' +
+        '<td class="right">' + s.gradePercent.toFixed(1) + '%</td></tr>';
+    }).join('');
+
+    detailEl.innerHTML =
+      '<h2>' + fmtDate(session.startedAt) + ' · ' + (session.sport === 'running' ? '跑步' : '走坡') + '</h2>' +
+      '<div class="sub">时长 ' + fmtDuration(session.durationSeconds) +
+        (session.targetMinutes ? ' · 目标 ' + session.targetMinutes + ' 分钟' : '') + '</div>' +
+      '<div class="grid">' + cells + '</div>' +
+      '<div class="zones">' + zones + '</div>' +
+      '<div class="zone-legend">' + zoneLegend + '</div>' +
+      '<div class="chart-card"><div class="title">心率 (bpm)</div>' + chart(hrPoints, { color: '#f25c5c', area: true }) + '</div>' +
+      '<div class="chart-card"><div class="title">坡度 (%)</div>' + chart(gradePoints, { color: '#ff7a3d', step: true }) + '</div>' +
+      '<div class="chart-card"><div class="title">速度 (km/h)</div>' + chart(speedPoints, { color: '#5c9ef2', step: true }) + '</div>' +
+      '<div class="chart-card"><div class="title">分段</div><table><thead><tr>' +
+        '<th>#</th><th class="right">开始</th><th class="right">结束</th><th class="right">速度</th><th class="right">坡度</th>' +
+      '</tr></thead><tbody>' + segmentRows + '</tbody></table></div>';
+
+    detailEl.classList.remove('hidden');
+    detailEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  listEl.addEventListener('click', function (event) {
+    var row = event.target.closest('tr[data-name]');
+    if (!row) return;
+    var startedAt = row.getAttribute('data-name');
+    var session = loadedSessions().find(function (s) { return s.startedAt === startedAt; });
+    if (session) renderDetail(session);
+  });
+
+  document.getElementById('saveBtn').addEventListener('click', function () {
+    state.token = tokenInput.value.trim();
+    localStorage.setItem('hb_gh_token', state.token);
+    detailEl.classList.add('hidden');
+    load();
+  });
+
+  tokenInput.addEventListener('keydown', function (event) {
+    if (event.key === 'Enter') document.getElementById('saveBtn').click();
+  });
+
+  document.getElementById('refreshBtn').addEventListener('click', load);
+
+  initToken();
+  load();
+})();
+</script>
+</body>
+</html>
