@@ -75,6 +75,7 @@
   var PAGE = 20;
 
   var state = { token: '', files: [], loaded: {}, detail: null };
+  var autoOpen = new URLSearchParams(location.search).get('open');
 
   var tokenInput = document.getElementById('tokenInput');
   var statsEl = document.getElementById('stats');
@@ -155,6 +156,11 @@
     }).then(function () {
       renderStats();
       renderList();
+      if (autoOpen) {
+        autoOpen = null;
+        var first = loadedSessions()[0];
+        if (first) renderDetail(first);
+      }
     }).catch(function (error) {
       listEl.innerHTML = '<div class="error">' + escapeHtml(error.message) + '</div>';
     });
